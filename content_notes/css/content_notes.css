@@ -1,0 +1,25 @@
+
+.content-note-wrapper {
+    padding: 10px;
+    background: beige;
+    box-shadow: 1px 1px 5px gray;
+    margin: 10px 0;
+}
+
+.content-note-wrapper .item-list {
+    clear: both;
+}
+
+.content-note-wrapper .item-list ul {
+    padding: 0;
+    float: right;
+}
+
+.content-note-wrapper .item-list ul li {
+    display: inline;
+}
+
+.content-note-wrapper .content-info {
+    font-size: 12px;
+    font-style: italic;
+}

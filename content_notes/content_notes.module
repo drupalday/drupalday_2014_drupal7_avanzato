@@ -1,0 +1,633 @@
+<?php
+
+/**
+ * @file
+ * Allow users to add notes to nodes.
+ */
+
+/**
+ * Content Notes cache bin.
+ */
+define('CONTENT_NOTES_CACHE_BIN', 'cache_content_notes');
+
+/**
+ * Content Notes are enabled for this node.
+ */
+define('CONTENT_NOTES_ENABLED', 1);
+
+/**
+ * Content Notes are disabled for this node.
+ */
+define('CONTENT_NOTES_DISABLED', 0);
+
+/**
+ * Content Notes are sorted from the newest to the oldest.
+ */
+define('CONTENT_NOTES_SORT_NEWEST', 'desc');
+
+/**
+ * Content Notes are sorted from the oldest to the newest.
+ */
+define('CONTENT_NOTES_SORT_OLDEST', 'asc');
+
+/**
+ * Implements hook_flush_caches().
+ */
+function content_notes_flush_caches() {
+  return array(CONTENT_NOTES_CACHE_BIN);
+}
+
+/**
+ * Implements hook_permission().
+ */
+function content_notes_permission() {
+  return array(
+    'administer content notes' => array(
+      'title' => t('Administer Content Notes')
+    ),
+    'view content notes' => array(
+      'title' => t('View Notes')
+    ),
+    'create content notes' => array(
+      'title' => t('Create Notes')
+    ),
+    'edit content notes' => array(
+      'title' => t('Edit Notes')
+    ),
+    'delete content notes' => array(
+      'title' => t('Delete Notes')
+    ),
+  );
+}
+
+/**
+ * Implements hook_menu().
+ */
+function content_notes_menu() {
+  $items = array();
+  $include_path = drupal_get_path('module', 'content_notes') . '/includes';
+
+  $items['admin/content/notes'] = array(
+    'title' => 'Notes',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('content_notes_list'),
+    'access arguments' => array('administer content notes'),
+    'type' => MENU_LOCAL_TASK | MENU_NORMAL_ITEM,
+    'file' => 'content_notes.admin.inc',
+    'file path' => $include_path,
+  );
+
+  $items['admin/content/notes/list'] = array(
+    'title' => 'List',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => -10,
+  );
+
+  $items['admin/content/notes/settings'] = array(
+    'title' => 'Settings',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('content_notes_settings_form'),
+    'access arguments' => array('administer content notes'),
+    'type' => MENU_LOCAL_TASK,
+    'file' => 'content_notes.admin.inc',
+    'file path' => $include_path
+  );
+
+  $items['admin/content/notes/%content_notes/edit'] = array(
+    'title' => 'Edit',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('content_notes_edit_form', 3),
+    'access arguments' => array('edit content notes'),
+    'type' => MENU_CALLBACK,
+    'file' => 'content_notes.form.inc',
+    'file path' => $include_path
+  );
+
+  $items['admin/content/notes/%content_notes/delete'] = array(
+    'title' => 'Delete',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('content_notes_delete_confirm', 3),
+    'access arguments' => array('delete content notes'),
+    'type' => MENU_CALLBACK,
+    'file' => 'content_notes.form.inc',
+    'file path' => $include_path
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function content_notes_form_node_type_form_alter(&$form, &$form_state, $form_id) {
+  if (!in_array($form['#node_type']->type, content_notes_get_enabled_types())) {
+    return;
+  }
+
+  $form['content_notes'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Notes settings'),
+    '#collapsible' => TRUE,
+    '#collapsed' => TRUE,
+    '#group' => 'additional_settings',
+  );
+
+  $form['content_notes']['content_notes'] = array(
+    '#title' => t('Default Note settings for new nodes'),
+    '#type' => 'select',
+    '#options' => array(
+      CONTENT_NOTES_DISABLED => t('Disabled'),
+      CONTENT_NOTES_ENABLED => t('Enabled'),
+    ),
+    '#default_value' => variable_get('content_notes_' . $form['#node_type']->type, CONTENT_NOTES_DISABLED)
+  );
+
+  $form['content_notes']['content_notes_sorting'] = array(
+    '#title' => t('Sorted by'),
+    '#type' => 'select',
+    '#options' => array(
+      CONTENT_NOTES_SORT_NEWEST => t('Newest first'),
+      CONTENT_NOTES_SORT_OLDEST => t('Oldest first'),
+    ),
+    '#default_value' => variable_get('content_notes_sorting_' . $form['#node_type']->type, CONTENT_NOTES_SORT_NEWEST)
+  );
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function content_notes_form_node_form_alter(&$form, &$form_state, $form_id) {
+  if (!in_array($form['#node']->type, content_notes_get_enabled_types())) {
+    return;
+  }
+
+  $node = $form['#node'];
+
+  $form['content_notes'] = array(
+    '#type' => 'fieldset',
+    '#access' => user_access('administer content_notes'),
+    '#title' => t('Notes settings'),
+    '#collapsible' => TRUE,
+    '#collapsed' => TRUE,
+    '#group' => 'additional_settings',
+  );
+
+  $default_status = variable_get('content_notes_' . $node->type, CONTENT_NOTES_DISABLED);
+  $form['content_notes']['content_notes'] = array(
+    '#title' => t('Notes'),
+    '#type' => 'radios',
+    '#title_display' => 'invisible',
+    '#options' => array(
+      CONTENT_NOTES_DISABLED => t('Disabled'),
+      CONTENT_NOTES_ENABLED => t('Enabled'),
+    ),
+    CONTENT_NOTES_DISABLED => array(
+      '#description' => t('Users cannot create new notes, but existing notes will be displayed.')
+    ),
+    CONTENT_NOTES_ENABLED => array(
+      '#description' => t('Users with "Create Notes" permission can create notes.')
+    ),
+    '#default_value' => isset($node->notes['status']) ? $node->notes['status'] : $default_status
+  );
+
+  $default_sort = variable_get('content_notes_sorting_' . $node->type, CONTENT_NOTES_SORT_NEWEST);
+  $form['content_notes']['content_notes_sorting'] = array(
+    '#type' => 'select',
+    '#access' => user_access('administer content_notes'),
+    '#title' => t('Sorted by'),
+    '#options' => array(
+      CONTENT_NOTES_SORT_NEWEST => t('Newest first'),
+      CONTENT_NOTES_SORT_OLDEST => t('Oldest first'),
+    ),
+    '#default_value' => isset($node->notes['sorting']) ? $node->notes['sorting'] : $default_sort,
+    '#states' => array(
+      'visible' => array(
+        'input[name="content_notes"]' => array('value' => CONTENT_NOTES_ENABLED)
+      )
+    )
+  );
+
+  $form['actions']['submit']['#submit'][] = 'content_notes_node_form_submit';
+}
+
+/**
+ * Submit callback: store node specific notes settings.
+ *
+ * @see content_notes_form_node_form_alter()
+ */
+function content_notes_node_form_submit($form, &$form_state) {
+  $values = $form_state['values'];
+
+  if ($values['nid']) {
+    $nodes_settings = variable_get('content_notes_nodes', array());
+    $nodes_settings[$values['nid']] = array(
+      'status' => $values['content_notes'],
+      'sorting' => $values['content_notes_sorting']
+    );
+    variable_set('content_notes_nodes', $nodes_settings);
+  }
+}
+
+/**
+ * Implements hook_node_prepare().
+ */
+function content_notes_node_prepare($node) {
+  if (!isset($node->notes)) {
+    $node->notes = content_notes_get_node_settings($node);
+  }
+}
+
+/**
+ * Implements hook_node_load().
+ */
+function content_notes_node_load($nodes, $types) {
+  foreach ($nodes as $nid => $node) {
+    $nodes[$nid]->notes = content_notes_get_node_settings($node);
+  }
+}
+
+/**
+ * Helper function: retrieve correct notes settings from the given $node object.
+ *
+ * @param $node
+ * @return array
+ */
+function content_notes_get_node_settings($node) {
+  if (!in_array($node->type, content_notes_get_enabled_types())) {
+    return array(
+      'status' => CONTENT_NOTES_DISABLED,
+      'sorting' => CONTENT_NOTES_SORT_NEWEST
+    );
+  }
+
+  $nodes_settings = variable_get('content_notes_nodes', array());
+  $default = array(
+    'status' => variable_get('content_notes_' . $node->type, CONTENT_NOTES_DISABLED),
+    'sorting' => variable_get('content_notes_sorting_' . $node->type, CONTENT_NOTES_SORT_NEWEST)
+  );
+
+  if (!empty($node->nid)) {
+    $settings = !empty($nodes_settings[$node->nid]) ? $nodes_settings[$node->nid] : $default;
+  }
+  else {
+    $settings = $default;
+  }
+
+  return $settings;
+}
+
+/**
+ * Implements hook_block_info().
+ */
+function content_notes_block_info() {
+  $blocks = array();
+
+  $blocks['notes_form'] = array(
+    'info' => t('Content notes: Notes form'),
+    'cache' => DRUPAL_NO_CACHE,
+  );
+
+  if (content_notes_get_display() == 'block') {
+    $blocks['notes_list'] = array(
+      'info' => t('Content notes: Notes list'),
+      'cache' => DRUPAL_CACHE_PER_PAGE,
+    );
+  }
+
+  return $blocks;
+}
+
+/**
+ * Implements hook_block_view().
+ */
+function content_notes_block_view($delta = '') {
+  $block = array();
+
+  $item = menu_get_item();
+  if (!empty($item['page_arguments'][0]->nid)) {
+    switch ($delta) {
+      case 'notes_form':
+        $block['subject'] = t('Add note');
+        $block['content'] = content_notes_block_form($item['page_arguments'][0]);
+        break;
+
+      case 'notes_list':
+        if (($notes = content_notes_build_notes($item['page_arguments'][0])) && (content_notes_get_display() == 'block')) {
+          $block['subject'] = t('Content Notes');
+          $block['content']['notes'] = array(
+            '#theme_wrappers' => array('content_note_wrapper'),
+            '#title' => NULL,
+            '#children' => $notes,
+          );
+        }
+        break;
+    }
+  }
+
+  return $block;
+}
+
+/**
+ * Implements hook_node_view().
+ */
+function content_notes_node_view($node, $view_mode, $langcode) {
+  if (!user_access('view content notes') || (content_notes_get_display() != 'content')) {
+    return;
+  }
+
+  if ($notes = content_notes_build_notes($node)) {
+    $node->content['notes'] = array(
+      '#theme_wrappers' => array('content_note_wrapper'),
+      '#title' => t('Content Notes'),
+      '#children' => $notes,
+    );
+  }
+}
+
+/**
+ * Build a renderable array of notes.
+ *
+ * @param $node
+ * @return array|mixed
+ */
+function content_notes_build_notes($node) {
+  $settings = content_notes_get_node_settings($node);
+  $notes = content_notes_get_all(array('nid' => $node->nid), $settings['sorting']);
+
+  if (!empty($notes)) {
+    foreach ($notes as $i => $note) {
+      $notes[$i] = _content_notes_get_renderable_array($note);
+    }
+
+    return $notes;
+  }
+
+  return array();
+}
+
+/**
+ * Shows node creation form.
+ *
+ * @param $node
+ * @return string
+ */
+function content_notes_block_form($node) {
+  $settings = content_notes_get_node_settings($node);
+  $form = '';
+
+  if ($settings['status'] == CONTENT_NOTES_ENABLED && user_access('create content notes')) {
+    module_load_include('inc', 'content_notes', 'includes/content_notes.form');
+    $form = drupal_get_form('content_notes_form', $node->nid);
+  }
+
+  return $form;
+}
+
+/**
+ * Save or Update a note.
+ *
+ * @param $note
+ */
+function content_notes_save($note) {
+  $note = (object) $note;
+  $primary_keys = array();
+
+  if (!isset($note->uid)) {
+    global $user;
+    $note->uid = $user->uid;
+  }
+
+  if (!empty($note->id)) {
+    $primary_keys[] = 'id';
+
+    $original = content_notes_load($note->id);
+    $note->created = $original->created;
+    $note->changed = REQUEST_TIME;
+  }
+  else {
+    $note->created = REQUEST_TIME;
+    $note->changed = $note->created;
+  }
+
+  // Allow other modules to alter the record before saving it.
+  drupal_alter('content_note_record', $note);
+
+  drupal_write_record('content_notes', $note, $primary_keys);
+
+  if (empty($primary_keys)) {
+    // Notifies other modules that a new note has been created.
+    module_invoke_all('content_note_insert', $note);
+  }
+  else {
+    // Notifies other modules that a new note has been updated.
+    module_invoke_all('content_note_update', $note, $original);
+  }
+}
+
+/**
+ * Deletes a content note.
+ *
+ * @param $id
+ * @return DatabaseStatementInterface
+ */
+function content_notes_delete($id) {
+  if ($note = content_notes_load($id)) {
+    module_invoke_all('content_note_delete', $note);
+
+    return db_delete('content_notes')
+      ->condition('id', $id)
+      ->execute();
+  }
+}
+
+/**
+ * Load a Content note by id.
+ *
+ * @param $id
+ * @return mixed
+ */
+function content_notes_load($id) {
+  return db_select('content_notes', 'n')
+    ->fields('n')
+    ->condition('id', check_plain($id))
+    ->execute()
+    ->fetchObject();
+}
+
+/**
+ * Get all notes (...great description).
+ *
+ * @param array $criteria
+ * @param string $sort
+ * @return mixed
+ */
+function content_notes_get_all($criteria = array(), $sort = CONTENT_NOTES_SORT_NEWEST) {
+  $query = db_select('content_notes', 'n');
+  $query->fields('n');
+
+  foreach ($criteria as $field => $value) {
+    $query->condition($field, check_plain($value));
+  }
+
+  $query->orderBy('created', $sort);
+
+  return $query->execute()->fetchAll();
+}
+
+/**
+ * Implements hook_theme().
+ */
+function content_notes_theme($existing, $type, $theme, $path) {
+  return array(
+    'content_note_wrapper' => array(
+      'variables' => array(
+        'title' => NULL,
+        'children' => NULL,
+      ),
+      'template' => 'content-notes-wrapper',
+      'path' => $path . '/templates'
+    ),
+    'content_note' => array(
+      'variables' => array(
+        'note' => NULL,
+      ),
+      'template' => 'content-note',
+      'path' => $path . '/templates'
+    )
+  );
+}
+
+/**
+ * Implements hook_preprocess_content_note_wrapper().
+ */
+function content_notes_preprocess_content_note_wrapper(&$vars) {
+  drupal_add_css(drupal_get_path('module', 'content_notes') . '/css/content_notes.css');
+}
+
+/**
+ * Implements hook_preprocess_content_note().
+ */
+function content_notes_preprocess_content_note(&$vars) {
+  $note = $vars['note'];
+  $author = user_load($note->uid);
+
+  $vars['author'] = l($author->name, 'user/' . $author->uid);
+  $vars['date'] = format_date($note->created, 'short');
+  $vars['links'] = array(
+    '#theme' => 'item_list',
+    '#type' => 'ul',
+    '#items' => array(
+      'edit' => l(t('Edit'), 'admin/content/notes/' . $note->id . '/edit'),
+      'delete' => l(t('Delete'), 'admin/content/notes/' . $note->id . '/delete')
+    ),
+  );
+}
+
+/**
+ * Helper function: creates a renderable array of a note.
+ *
+ * @param $note
+ * @return array
+ */
+function _content_notes_get_renderable_array($note) {
+  $render = array(
+    '#theme' => 'content_note',
+    '#note' => $note,
+    '#cache' => array(
+      'keys' => array($note->id, $note->nid, $note->uid),
+      'granularity' => DRUPAL_CACHE_PER_PAGE,
+      'bin' => CONTENT_NOTES_CACHE_BIN
+    ),
+    '#sorted' => TRUE,
+  );
+
+  return $render;
+}
+
+/**
+ * Implements hook_content_note_update().
+ */
+function content_notes_content_note_update($note, $original) {
+  global $conf;
+  $cid_parts = array(
+    $note->id,
+    $note->nid,
+    $note->uid,
+    $conf['theme_default'],
+    url('node/' . $note->nid, array('absolute' => TRUE))
+  );
+
+  $cid = implode(':', $cid_parts);
+  cache_clear_all($cid, CONTENT_NOTES_CACHE_BIN);
+}
+
+/**
+ * Implements hook_content_note_delete().
+ */
+function content_notes_content_note_delete($note) {
+  $nodes_settings = variable_get('content_notes_nodes', array());
+  if (!empty($nodes_settings[$note->nid])) {
+    unset($nodes_settings[$note->nid]);
+    variable_set('content_notes_nodes', $nodes_settings);
+  }
+
+  cache_clear_all($note->id . ':', CONTENT_NOTES_CACHE_BIN, TRUE);
+}
+
+/**
+ * Get a list of node types enabled for Notes.
+ *
+ * @return array
+ */
+function content_notes_get_enabled_types() {
+  return array_filter(variable_get('content_notes_enabled_types', array()));
+}
+
+/**
+ * Get the configured display type for Content Notes.
+ *
+ * @return string
+ */
+function content_notes_get_display() {
+  return variable_get('content_notes_display_type', 'block');
+}
+
+/**
+ * Implements hook_field_extra_fields().
+ */
+function content_notes_field_extra_fields() {
+  $extra = array();
+
+  if (content_notes_get_display() == 'content') {
+    foreach (content_notes_get_enabled_types() as $type) {
+      $extra['node'][$type] = array(
+        'display' => array(
+          'notes' => array(
+            'label' => t('Content Notes'),
+            'description' => t('Content Notes module elements'),
+            'weight' => 0,
+          ),
+        ),
+      );
+    }
+  }
+
+  return $extra;
+}
+
+/**
+ * Invokes rules events.
+ *
+ * @param $op
+ * @param $note
+ */
+function content_notes_invoke_rule($op, $note) {
+  if (!in_array($op, array('insert', 'update', 'delete'))) {
+    return;
+  }
+
+  $user = user_load($note->uid);
+  $node = node_load($note->nid);
+
+  rules_invoke_event('content_note_' . $op, $note->note, $node, $user);
+}
